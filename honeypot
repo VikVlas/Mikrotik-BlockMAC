@@ -1,0 +1,173 @@
+Как при помощи Mikrotik защитить свою сеть и «выглядывающие» из-за него сервисы от внешних атак. А именно всего тремя правилами организовать на Микротике honeypot.
+
+Итак, представим, что у нас небольшой офис, внешний IP за которым стоит RDP сервер, для работы сотрудников по удаленке. Первое правило это конечно сменить порт 3389 на внешнем интерфейсе на другой. Но это ненадолго, спустя пару дней журнал аудита терминального сервера начнет показывать по несколько неудачных авторизаций в секунду от неизвестных клиентов.
+
+Другая ситуация, у Вас за Mikrotik спрятан asterisk, естественно не на 5060 udp порту, и через пару дней также начинается перебор паролей… да да, знаю, fail2ban наше вcё, но над ним еще попыхтеть придется… вот я например недавно поднял его на ubuntu 18.04 и с удивлением обнаружил, что из коробки fail2ban не содержит актуальных настроек для asterisk из той-же коробки того-же ubuntu дистрибутива… а гуглить быстрые настройки готовых «рецептов» уже не получается, цифры у релизов с годами растут, а статьи с «рецептами» для старых версий уже не работают, а новых почти не появляется… Но что-то я отвлекся…
+
+Итак, что такое honeypot в двух словах — это приманка, в нашем случае какой-либо популярный порт на внешнем IP, любой запрос на этот порт от внешнего клиента отправляет src адрес в черный список. Все.
+
+ 
+
+/ip firewall filter
+
+add action=add-src-to-address-list address-list="Honeypot Hacker" \
+
+address-list-timeout=30d0h0m chain=input comment="block honeypot ssh rdp winbox" \
+
+connection-state=new dst-port=22,3389,8291 in-interface=\
+
+ether4-wan protocol=tcp
+
+add action=add-src-to-address-list address-list="Honeypot Hacker" \
+
+address-list-timeout=30d0h0m chain=input comment=\
+
+"block honeypot asterisk" connection-state=new dst-port=5060 \
+
+in-interface=ether4-wan protocol=udp
+
+/ip firewall raw
+
+add action=drop chain=prerouting in-interface=ether4-wan src-address-list=\
+
+"Honeypot Hacker"
+
+ 
+
+Первое правило на популярных TCP портах 22, 3389, 8291 внешнего интерфейса ether4-wan отправляет IP «гостя» в список «Honeypot Hacker» (порты для ssh, rdp и winbox заблаговременно отключены или изменены на другие). Второе делает то-же самое на популярном UDP 5060.
+
+Третье правило на стадии прероутинга дропает пакеты «гостей» чей srs-address попал в «Honeypot Hacker».
+
+Спустя две недели работы моего домашнего Mikrotik список «Honeypot Hacker» включил в себя около полутора тысяч IP адресов любителей «подержать за вымя» мои сетевые ресурсы (дома своя телефония, почта, nextcloud, rdp) Brute-force атаки прекратились, наступило блаженство.
+
+На работе не все так просто оказалось, там rdp сервер продолжают ломать перебором паролей.
+
+Судя по всему номер порта определили сканером за долго до включения honeypot, а во время карантина не так-то легко перенастроить более 100 пользователей, из которых 20% старше 65 лет. В случае когда порт менять нельзя, есть небольшой рабочий рецепт. Подобное в интернете встречал, но тут присутствует допил и тонкая настройка:
+
+ 
+
+Правила для настройки Port Knocking
+
+ 
+
+/ip firewall filter
+
+add action=add-src-to-address-list address-list=rdp_blacklist \
+
+address-list-timeout=15m chain=forward comment=rdp_to_blacklist \
+
+connection-state=new dst-port=3389 protocol=tcp src-address-list=\
+
+rdp_stage12 add action=add-src-to-address-list address-list=rdp_stage12 \
+
+address-list-timeout=4m chain=forward connection-state=new dst-port=3389 \
+
+protocol=tcp src-address-list=rdp_stage11
+
+add action=add-src-to-address-list address-list=rdp_stage11 \
+
+address-list-timeout=4m chain=forward connection-state=new dst-port=3389 \
+
+protocol=tcp src-address-list=rdp_stage10
+
+add action=add-src-to-address-list address-list=rdp_stage10 \
+
+address-list-timeout=4m chain=forward connection-state=new dst-port=3389 \
+
+protocol=tcp src-address-list=rdp_stage9
+
+add action=add-src-to-address-list address-list=rdp_stage9 \
+
+address-list-timeout=4m chain=forward connection-state=new dst-port=3389 \
+
+protocol=tcp src-address-list=rdp_stage8
+
+add action=add-src-to-address-list address-list=rdp_stage8 \
+
+address-list-timeout=4m chain=forward connection-state=new dst-port=3389 \
+
+protocol=tcp src-address-list=rdp_stage4
+
+add action=add-src-to-address-list address-list=rdp_stage7 \
+
+address-list-timeout=4m chain=forward connection-state=new dst-port=3389 \
+
+protocol=tcp src-address-list=rdp_stage6
+
+add action=add-src-to-address-list address-list=rdp_stage6 \
+
+address-list-timeout=4m chain=forward connection-state=new dst-port=3389 \
+
+protocol=tcp src-address-list=rdp_stage5
+
+add action=add-src-to-address-list address-list=rdp_stage5 \
+
+address-list-timeout=2m chain=forward connection-state=new dst-port=\
+
+3389 protocol=tcp src-address-list=rdp_stage4
+
+add action=add-src-to-address-list address-list=rdp_stage4 \
+
+address-list-timeout=2m chain=forward connection-state=new dst-port=\
+
+3389 protocol=tcp src-address-list=rdp_stage3
+
+add action=add-src-to-address-list address-list=rdp_stage3 \
+
+address-list-timeout=2m chain=forward connection-state=new dst-port=3389 \
+
+protocol=tcp src-address-list=rdp_stage2
+
+add action=add-src-to-address-list address-list=rdp_stage2 \
+
+address-list-timeout=2m chain=forward connection-state=new dst-port=3389 \
+
+protocol=tcp src-address-list=rdp_stage1
+
+add action=add-src-to-address-list address-list=rdp_stage1 \
+
+address-list-timeout=2m chain=forward connection-state=new dst-port=3389 \
+
+protocol=tcp /
+
+ip firewall raw
+
+add action=drop chain=prerouting in-interface=ether4-wan src-address-list=\
+
+rdp_blacklist
+
+ 
+
+За 4 минуты удаленному клиенту разрешается сделать только 12 новых «запросов» к RDP серверу. Одна попытка входа — это от 1 до 4 «запросов». При 12-ом «запросе» — блокировка на 15 минут. В моем случае злоумышленники сервер взламывать не перестали, подстроились под таймеры и теперь делают это очень медленно, такая скорость подбора сводит эффективность атаки к нулю. Сотрудники предприятия от принятых мер никаких неудобств в работе практически не испытывают.
+
+ 
+
+Еще одна маленькая хитрость
+ 
+
+Это правило включается по расписанию в час ночи и выключается в 5, когда живые люди точно спят, а автоматизированные подборщики продолжают бодрствовать.
+
+ 
+
+/ip firewall filter
+
+add action=add-src-to-address-list address-list=rdp_blacklist \
+
+address-list-timeout=1w0d0h0m chain=forward comment=\
+
+"night_rdp_blacklist" connection-state=new disabled=\
+
+yes dst-port=3389 protocol=tcp src-address-list=rdp_stage8
+
+ 
+
+Уже на 8ом по счету соединении IP злоумышленника отправляется в черный список на неделю. Красота!
+
+ 
+
+Ну и в довесок к вышесказанному добавлю ссылку на Wiki статью, с рабочей настройкой защиты Микротика от сетевых сканеров. wiki.mikrotik.com/wiki/Drop_port_scanners
+
+На моих устройствах эта настройка работает вместе с вышеописанными honeypot правилами, неплохо их дополняя.
+
+UPD: Как подсказали в комментариях, правило дропа пакетов перемещено в RAW, для снижения нагрузки на роутер.
+
