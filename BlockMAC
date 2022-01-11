@@ -1,0 +1,13 @@
+:local pop 4
+:local mac
+:local wifi [/log find message~"disconnected, unicast key exchange timeout"]foreach i in=$wifi do={
+:set mac [:pick [/log get $i message ] 0 ([:len [/log get $i message ]]-50)]
+#:log warning $mac
+if ([:len [/log find message~($mac . "@wlan1: disconnected, unicast key exchange timeout")] ] >= $pop) do={
+if ([/interface wireless access-list find mac-address=$mac] = "" ) do={
+/interface wireless access-list add mac-address=$mac authentication=no
+interface=all
+}
+}
+}
+#:log warning "FINISH"
