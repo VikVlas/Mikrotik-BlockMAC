@@ -1,0 +1,211 @@
+В связи с пандемией вируса covid-19 и всеобщим карантином во многих странах единственным выходом многих компаний, чтобы продолжать работу — удаленный доступ к рабочим местам через интернет. Есть много относительно безопасных методов для удаленной работы — но учитывая масштаб проблемы, необходим простой для любых пользователей метод удаленного подключения к офису и без необходимости дополнительных настроек, объяснений, утомительных консультаций и длинных инструкций. Таким методом есть любимый многими админами RDP (Remote Desktop Protocol). Подключение напрямую к рабочему месту по RDP идеально решает нашу задачу, кроме одной большой ложки дегтя — держать отрытым для интернета порт RDP очень небезопасно. Поэтому ниже предлагаю простой, но надежный метод защиты.
+
+Так как часто я сталкиваюсь с небольшими организациями, где в качестве выхода в интернет используют устройства Mikrotik, то ниже будет показано, как это реализовать на микротике, но метод защиты Port Knocking легко реализуем и на других устройствах более высокого класса при аналогичных настройках входного маршрутизатора и firewall.
+
+Коротко о Port Knocking. Идеальная внешняя защита сети подключенной к интернет — это когда все ресурсы и порты закрыты извне фаерволом. И хотя роутер с таким настроенным фаерволом никак не реагирует приходящие извне пакеты, он их прослушивает. Поэтому можно роутер настроить так, что при получении определенной (кодовой) последовательности сетевых пакетов на разные порты, он (роутер) для IP откуда пришли пакеты открывает доступ к определенным ресурсам(портам, протоколам и пр).
+
+Теперь к делу. Детального описания настройки фаервола на микротике делать не буду — в интернете для этого полно качественных источников. В идеале firewall блокирует все входящие пакеты, но
+
+ 
+
+/ip firewall filter
+
+add action=accept chain=input comment="established and related accept" connection-state=established,related
+
+ 
+
+Разрешает входящий трафик от уже установленных(established, related) соединений.
+Теперь настраиваем Port Knocking на Микротике:
+
+ 
+
+ 
+
+/ip firewall filter
+
+add action=drop chain=input dst-port=19000 protocol=tcp src-address-list="Black_scanners" comment=RemoteRules
+
+add action=drop chain=input dst-port=16000 protocol=tcp src-address-list="Black_scanners" comment=RemoteRules
+
+add action=add-src-to-address-list address-list="remote_port_1" address-list-timeout=1m chain=input dst-port=19000 protocol=tcp comment=RemoteRules
+
+add action=add-src-to-address-list address-list="Black_scanners" address-list-timeout=60m chain=input dst-port=19001 protocol=tcp src-address-list="remote_port_1" comment=RemoteRules
+
+add action=add-src-to-address-list address-list="Black_scanners" address-list-timeout=60m chain=input dst-port=18999 protocol=tcp src-address-list="remote_port_1" comment=RemoteRules
+
+add action=add-src-to-address-list address-list="Black_scanners" address-list-timeout=60m chain=input dst-port=16001 protocol=tcp src-address-list="remote_port_1" comment=RemoteRules
+
+add action=add-src-to-address-list address-list="Black_scanners" address-list-timeout=60m chain=input dst-port=15999 protocol=tcp src-address-list="remote_port_1" comment=RemoteRules
+
+add action=add-src-to-address-list address-list="allow_remote_users" address-list-timeout=1m chain=input dst-port=16000 protocol=tcp src-address-list="remote_port_1" comment=RemoteRules move [/ip firewall filter find comment=RemoteRules] 1
+
+/ip firewall nat
+
+add action=dst-nat chain=dstnat comment="remote_rdp" src-address-list="allow_remote_users" dst-port=33890 in-interface-list=WAN protocol=tcp to-addresses=192.168.1.33 to-ports=3389
+
+ 
+
+ 
+
+Теперь подробнее:
+
+первые два правила
+
+ 
+
+ 
+
+/ip firewall filter
+
+add action=drop chain=input dst-port=19000 protocol=tcp src-address-list="Black_scanners" comment=RemoteRules
+
+add action=drop chain=input dst-port=16000 protocol=tcp src-address-list="Black_scanners" comment=RemoteRules
+
+ 
+
+запрещают входящие пакеты с IP адресов, которые попали в черный список при сканировании портов;
+
+Третье правило:
+
+ 
+
+ 
+
+add action=add-src-to-address-list address-list="remote_port_1" address-list-timeout=1m chain=input dst-port=19000 protocol=tcp comment=RemoteRules
+
+ 
+
+добавляет ip в список хостов, которые сделали правильный первый стук на нужный порт (19000);
+Следующие четыре правила:
+
+ 
+
+add action=add-src-to-address-list address-list="Black_scanners" address-list-timeout=60m chain=input dst-port=19001 protocol=tcp src-address-list="remote_port_1" comment=RemoteRules
+
+add action=add-src-to-address-list address-list="Black_scanners" address-list-timeout=60m chain=input dst-port=18999 protocol=tcp src-address-list="remote_port_1" comment=RemoteRules
+
+add action=add-src-to-address-list address-list="Black_scanners" address-list-timeout=60m chain=input dst-port=16001 protocol=tcp src-address-list="remote_port_1" comment=RemoteRules
+
+add action=add-src-to-address-list address-list="Black_scanners" address-list-timeout=60m chain=input dst-port=15999 protocol=tcp src-address-list="remote_port_1" comment=RemoteRules
+
+ 
+
+создают порты ловушки для желающих просканировать ваши порты, и при обнаружении таких попыток заносят их ip в черный список на 60 минут, в течении которых первые два правила не дадут таким хостам возможности постучаться в правильные порты;
+
+Следующее правило:
+
+ 
+
+add action=add-src-to-address-list address-list="allow_remote_users" address-list-timeout=1m chain=input dst-port=16000 protocol=tcp src-address-list="remote_port_1" comment=RemoteRules
+
+ 
+
+помещает ip в список разрешенных на 1 минуту (достаточно для установления соединения), так как сделан второй правильный стук в нужный порт(16000);
+
+Следующая команда:
+
+ 
+
+ 
+
+move [/ip firewall filter find comment=RemoteRules] 1
+
+ 
+
+перемещает наши правила вверх по цепочки обработки фаерволом, так как скорее всего у нас уже будут настроены разные запрещающие правила, которые не дадут сработать нашим вновь созданным. Самое первое правило в микротике начинается с нуля, но у меня на устройстве ноль быль занят встроенным правилом и невозможно было переместить — я переместил на 1. Поэтому смотрим по нашим настройкам — куда можно переместить и указываем нужный номер.
+
+Следующая настройка:
+
+ 
+
+/ip firewall nat
+
+add action=dst-nat chain=dstnat comment="remote_rdp_to_33" src-address-list="allow_remote_users" dst-port=33890 in-interface-list=WAN protocol=tcp to-addresses=192.168.1.33 to-ports=3389
+
+ 
+
+осуществляет проброс произвольно выбранного порта 33890 на обычный RDP порт 3389 и ip нужного нам компьютера или терминального сервера. Таких правил мы создаем для всех необходимых внутренних ресурсов, желательно выставляя нестандартные(и разные) внешние порты. Естественно, что ip внутренних ресурсов должны быть либо статичными либо закреплены на DHCP сервере.
+
+Теперь наш микротик настроен и нам нужна простая для пользователя процедура подключения к нашему внутреннему RDP. Так как у нас это в основном Windows пользователи, то создаем простой bat файл и назовем его StartRDP.bat:
+
+ 
+
+ 
+
+1.htm
+
+1.rdp
+
+ 
+
+соответственно 1.htm содержит следующий код:
+
+ 
+
+ 
+
+<img src="http://my_router.sn.mynetname.net:19000/1.jpg">
+
+нажмите обновить страницу для повторного захода по RDP
+
+<img src="http://my_router.sn.mynetname.net:16000/2.jpg">
+
+ 
+
+тут содержится две ссылки на мнимые картинки которые находятся по адресу my_router.sn.mynetname.net — этот адрес мы берем из системы DDNS микротика предварительно включив это в нашем микротике: заходим в меню IP->Cloud — ставим галочку DDNS Enabled, нажимаем Apply и копируем dns имя нашего роутера. Но это обязательно лишь когда внешний ip роутера динамический или используется конфигурация с несколькими провайдерами интернета.
+
+Порт в первой ссылке :19000 соответствует первому порту по которому нужно стучаться, во второй соответственно второму. Между ссылками короткая инструкция, которая показывает, что делать если вдруг наше соединение из-за коротких неполадок в сети оборвалось — обновляем страницу, порт RDP для нас вновь открывается на 1 мин минуту и наш сеанс восстанавливается. Также текст между тегами img образует для браузера микрозадержку, которая снижает вероятность доставки первым пакета на второй порт (16000) — пока за две недели пользования (30 человек) таких случаев не было.
+
+Далее идет файл 1.rdp, который мы можем настроить один для всех или отдельно для каждого пользователя (я так и сделал — легче потратить дополнительно 15 минут, чем несколько часов на консультации тех, кто не смог разобраться)
+
+ 
+
+screen mode id:i:2
+
+use multimon:i:1
+
+.....
+
+connection type:i:6
+
+networkautodetect:i:0
+
+.....
+
+disable wallpaper:i:1
+
+.....
+
+full address:s:my_router.sn.mynetname.net:33890
+
+.....
+
+username:s:myuserlogin
+
+domain:s:mydomain
+
+ 
+
+из интересных настроек тут use multimon:i:1 — это включает использование нескольких мониторов — некоторым это необходимо, а включить сами не додумаются.
+
+connection type:i:6 и networkautodetect:i:0 — так интернет у большинства выше 10 мбит, то включаем тип соединения 6(локальная сеть 10Мбит и выше) и отключаем networkautodetect, так как если по умолчанию(auto), то даже редкая небольшая задержка в сети автоматически надолго устанавливает заниженную скорость для нашего сеанса, что может создавать заметные задержки в работе, особенно в графических программах.
+
+disable wallpaper:i:1 — отключаем картинку рабочего стола
+username:s:myuserlogin — логин пользователя указываем, так как значительная часть наших пользователей не знает своего логина
+domain:s:mydomain — указываем домен или имя компьютера
+
+Но если мы хотим упростить себе задачу по созданию процедуры подключения, то можем воспользоваться и PowerShell — StartRDP.ps1
+
+ 
+
+Test-NetConnection -ComputerName my_router.sn.mynetname.net -Port 19000
+
+Test-NetConnection -ComputerName my_router.sn.mynetname.net -Port 16000
+
+mstsc /v:my_router.sn.mynetname.net:33890
+
+ 
+
+Также немного про RDP клиент в Windows: MS прошла долгий путь оптимизации протокола и его серверной и клиентской части, реализовала много полезных фич — таких как работа с аппаратным 3D, оптимизация разрешения экрана под ваш монитор, мультиэкран и прочее. Но естественно, все реализовано в режиме обратной совместимости и если клиент Windows 7, а удаленный ПК Windows 10, то RDP работать будет используя протокол версии 7.0. Но благо можно обновлять версии RDP до более свежих версий — например можно повысить версию протокола с 7.0(Windows 7) до 8.1. Поэтому для удобства клиентов нужно максимально повысить версии серверной части, а также скинуть ссылки на обновление до новых версий клиентов протокола RDP.
+
+В итоге мы имеем простую и относительно безопасную технологию удаленного подключения к рабочему ПК или терминальному серверу. Но для более безопасного подключения наш способ Port Knocking можно усложнять для атаки на несколько порядков, путем добавления портов для проверки — можно по той же логике добавить 3,4,5,6… порт и в таком случае прямое вторжение в вашу сеть будет почти неосуществимым.
